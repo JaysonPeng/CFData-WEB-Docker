@@ -1651,7 +1651,7 @@
 
         <div id="configMenu" class="settings-menu hidden">
             <div class="settings-title">💾 保存配置</div>
-            <button class="menu-btn" onclick="saveConfigToLS()">保存当前配置</button>
+            <button class="menu-btn" onclick="saveConfigToServer()">保存当前配置到服务器</button>
 
             <div class="settings-title" style="margin-top:12px;">📂 加载配置</div>
             <button class="menu-btn" onclick="loadConfigFromLS()">加载保存配置</button>
@@ -2790,6 +2790,19 @@
             updateScanModeHint();
 
             return true;
+        }
+
+        function saveConfigToServer() {
+            const config = readFormValues();
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                showNoticeCard('与服务器的连接尚未就绪，请稍后再试');
+                return;
+            }
+            if (!wsSend({ type: 'save_config', data: config })) {
+                showNoticeCard('保存配置失败：WebSocket 未连接');
+                return;
+            }
+            log('正在将当前配置保存到服务器...');
         }
 
         function saveConfigToLS() {
@@ -6023,6 +6036,14 @@
 
                     log('配置文件已从服务器加载');
                     showNoticeCard('服务器配置同步成功');
+                    break;
+                case 'save_config_result':
+                    if (msg.data && msg.data.success) {
+                        showNoticeCard('服务器配置保存成功');
+                        log('当前配置已保存到服务器: ' + (msg.data.path || 'cfdata-config.json'));
+                    } else {
+                        showNoticeCard('服务器配置保存失败: ' + ((msg.data && msg.data.message) || '未知错误'));
+                    }
                     break;
                 }
                 case 'scan_progress':

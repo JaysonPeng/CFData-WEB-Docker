@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -392,6 +393,110 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		},
 		"reset_all_config": func(data json.RawMessage) {
 			resetAllConfigFiles(session)
+		},
+		"save_config": func(data json.RawMessage) {
+			if len(data) == 0 || string(data) == "null" {
+				session.sendWSMessage("save_config_result", map[string]interface{}{"success": false, "message": "配置数据为空"})
+				return
+			}
+
+			var form struct {
+				Official map[string]interface{} `json:"official"`
+				NSB      map[string]interface{} `json:"nsb"`
+			}
+			if err := json.Unmarshal(data, &form); err != nil {
+				session.sendWSMessage("save_config_result", map[string]interface{}{"success": false, "message": "配置数据解析失败: " + err.Error()})
+				return
+			}
+
+			cfgPath := getConfigFilePath()
+			raw, err := os.ReadFile(cfgPath)
+			if err != nil {
+				session.sendWSMessage("save_config_result", map[string]interface{}{"success": false, "message": "读取现有配置失败: " + err.Error()})
+				return
+			}
+
+			var root map[string]interface{}
+			if err := json.Unmarshal(raw, &root); err != nil {
+				session.sendWSMessage("save_config_result", map[string]interface{}{"success": false, "message": "解析现有配置失败: " + err.Error()})
+				return
+			}
+			cfg, ok := root["config"].(map[string]interface{})
+			if !ok {
+				cfg = map[string]interface{}{}
+				root["config"] = cfg
+			}
+
+			// 只更新网页当前能够编辑的字段，服务器配置中的其它 CLI 参数保持不变。
+			setString := func(m map[string]interface{}, from, to string) {
+				if v, exists := m[from]; exists {
+					cfg[to] = v
+				}
+			}
+			setNumber := func(m map[string]interface{}, from, to string) {
+				if v, exists := m[from]; exists {
+					switch x := v.(type) {
+					case string:
+						if strings.TrimSpace(x) == "" {
+							return
+						}
+						if f, e := strconv.ParseFloat(strings.TrimSpace(x), 64); e == nil {
+							cfg[to] = f
+						}
+					case float64:
+						cfg[to] = x
+					case json.Number:
+						if f, e := x.Float64(); e == nil {
+							cfg[to] = f
+						}
+					}
+				}
+			}
+			setBoolFromOnOff := func(m map[string]interface{}, from, to string) {
+				if v, exists := m[from]; exists {
+					s := strings.ToLower(strings.TrimSpace(fmt.Sprint(v)))
+					cfg[to] = s == "on" || s == "true" || s == "1"
+				}
+			}
+
+			setString(form.Official, "scanMode", "scanmode")
+			setNumber(form.Official, "ipType", "offiptype")
+			setNumber(form.Official, "port", "offport")
+			setNumber(form.Official, "threads", "offthreads")
+			setNumber(form.Official, "delay", "offdelay")
+			setNumber(form.Official, "speedMin", "offspeedmin")
+			setNumber(form.Official, "speedLimit", "offspeedlimit")
+			setString(form.Official, "targetDC", "offdc")
+			setString(form.Official, "speedUrl", "offurl")
+
+			setNumber(form.NSB, "threads", "nsbthreads")
+			setNumber(form.NSB, "delay", "nsbdelay")
+			setNumber(form.NSB, "resultLimit", "nsbresultlimit")
+			setNumber(form.NSB, "fallbackPort", "nsbfallbackport")
+			setNumber(form.NSB, "speedMin", "nsbspeedmin")
+			setNumber(form.NSB, "speedLimit", "nsbspeedlimit")
+			setNumber(form.NSB, "speedTest", "nsbspeedtest")
+			setString(form.NSB, "targetDC", "nsbdc")
+			setString(form.NSB, "outFile", "nsbout")
+			setString(form.NSB, "speedUrl", "nsburl")
+			setString(form.NSB, "sourceUrl", "nsbsourceurl")
+			setBoolFromOnOff(form.NSB, "tls", "nsbtls")
+			if v, exists := form.NSB["compactView"]; exists {
+				s := strings.ToLower(strings.TrimSpace(fmt.Sprint(v)))
+				cfg["nsbcompact"] = s != "full"
+			}
+
+			encoded, err := json.MarshalIndent(root, "", "  ")
+			if err != nil {
+				session.sendWSMessage("save_config_result", map[string]interface{}{"success": false, "message": "生成配置 JSON 失败: " + err.Error()})
+				return
+			}
+			encoded = append(encoded, '\n')
+			if err := os.WriteFile(cfgPath, encoded, 0600); err != nil {
+				session.sendWSMessage("save_config_result", map[string]interface{}{"success": false, "message": "写入配置文件失败: " + err.Error()})
+				return
+			}
+			session.sendWSMessage("save_config_result", map[string]interface{}{"success": true, "path": cfgPath})
 		},
 		"get_config": func(data json.RawMessage) {
 			cfgPath := getConfigFilePath()

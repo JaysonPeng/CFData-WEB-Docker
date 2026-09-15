@@ -6037,6 +6037,7 @@
                     log('配置文件已从服务器加载');
                     showNoticeCard('服务器配置同步成功');
                     break;
+                }
                 case 'save_config_result':
                     if (msg.data && msg.data.success) {
                         showNoticeCard('服务器配置保存成功');
@@ -6045,7 +6046,6 @@
                         showNoticeCard('服务器配置保存失败: ' + ((msg.data && msg.data.message) || '未知错误'));
                     }
                     break;
-                }
                 case 'scan_progress':
                     if (isStoppingTask) break;
                     updateProgress(msg.data.current || 0, msg.data.total || 0, '扫描中');

@@ -2744,8 +2744,11 @@
         }
 
         function applyConfigValues(config) {
-            const o = config.official || {};
-            const n = config.nsb || {};
+            const o = config?.official || {};
+            const n = config?.nsb || {};
+
+            // 先写入服务器配置，再统一刷新依赖状态。
+            // setValue 会跳过 undefined/null/空字符串，避免用缺省值覆盖当前页面。
             setValue('officialScanMode', o.scanMode);
             setValue('officialIpType', o.ipType);
             setValue('officialTestPort', o.port);
@@ -2755,6 +2758,7 @@
             setValue('officialSpeedLimit', o.speedLimit);
             setValue('officialAutoSpeed', o.autoSpeed);
             setValue('officialTargetDC', o.targetDC);
+
             setValue('nsbScanMode', n.scanMode);
             setValue('nsbThreads', n.threads);
             setValue('nsbDelay', n.delay);
@@ -2765,17 +2769,27 @@
             setValue('nsbSpeedTest', n.speedTest);
             setValue('nsbEnableSpeed', n.enableSpeed);
             setValue('nsbTargetDC', n.targetDC);
-            if (n.tls) setValue('nsbTls', n.tls);
-            if (n.compactView) setValue('nsbCompactView', n.compactView);
+            setValue('nsbTls', n.tls);
+            setValue('nsbCompactView', n.compactView);
             setValue('nsbOutFile', n.outFile);
             setValue('nsbSourceUrl', n.sourceUrl);
-            if (o.speedUrl) applySpeedUrlConfig('officialSpeedUrl', 'officialSpeedUrlPreset', o.speedUrl);
-            if (n.speedUrl) applySpeedUrlConfig('nsbSpeedUrl', 'nsbSpeedUrlPreset', n.speedUrl);
+
+            if (o.speedUrl !== undefined) {
+                applySpeedUrlConfig('officialSpeedUrl', 'officialSpeedUrlPreset', o.speedUrl);
+            }
+            if (n.speedUrl !== undefined) {
+                applySpeedUrlConfig('nsbSpeedUrl', 'nsbSpeedUrlPreset', n.speedUrl);
+            }
+
+            // 服务器同步后必须重新计算依赖控件状态，否则后续初始化逻辑可能把刚同步的值覆盖掉。
             syncOfficialSpeedConfigState();
             syncNSBSpeedConfigState();
             updateOfficialAutoSpeedControls();
             updateNSBSpeedControls();
             updateNSBCompactToggle();
+            updateScanModeHint();
+
+            return true;
         }
 
         function saveConfigToLS() {
@@ -2831,6 +2845,19 @@
             result.nsb.speedMin = pick(c, ['nsbspeedmin']);
             result.official.speedLimit = pick(c, ['offspeedlimit', 'speedlimit']);
             result.nsb.speedLimit = pick(c, ['nsbspeedlimit']);
+
+            // CLI 配置中的测速开关没有独立字段：
+            // 官方模式以 offspeedlimit > 0 表示开启自动测速，
+            // 非标模式以 nsbspeedtest > 0 表示开启自动测速。
+            const officialSpeedLimit = pick(c, ['offspeedlimit', 'speedlimit']);
+            if (officialSpeedLimit !== undefined) {
+                result.official.autoSpeed = Number(officialSpeedLimit) > 0 ? 'on' : 'off';
+            }
+            const nsbSpeedTest = pick(c, ['nsbspeedtest', 'speedtest']);
+            if (nsbSpeedTest !== undefined) {
+                result.nsb.enableSpeed = Number(nsbSpeedTest) > 0 ? 'on' : 'off';
+            }
+
             result.official.targetDC = pick(c, ['offdc', 'dc']);
             result.nsb.targetDC = pick(c, ['nsbdc']);
             result.official.speedUrl = pick(c, ['offurl', 'url']);
@@ -2890,7 +2917,15 @@
         }
 
         function loadConfigFromServer() {
-            wsSend({ type: 'get_config' });
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                showNoticeCard('服务器连接尚未就绪，请等待“已连接服务器”后再试');
+                return false;
+            }
+            const sent = wsSend({ type: 'get_config' });
+            if (sent) {
+                log('正在从服务器同步配置...');
+            }
+            return sent;
         }
 
         function wsSend(payload) {
@@ -5975,10 +6010,21 @@
                 case 'proxy_country_result':
                     handleProxyCountryResult(msg.data || {});
                     break;
-                case 'config_data':
-                    applyConfigValues(mapCLIConfigToForm(msg.data));
+                case 'config_data': {
+                    const serverConfig = msg.data || {};
+                    const formConfig = mapCLIConfigToForm(serverConfig);
+                    applyConfigValues(formConfig);
+
+                    // CLI 配置中的 mode 决定同步后显示哪个配置页。
+                    const serverMode = serverConfig?.config?.mode || serverConfig?.mode;
+                    if (serverMode === 'official' || serverMode === 'nsb') {
+                        switchMode(serverMode);
+                    }
+
                     log('配置文件已从服务器加载');
+                    showNoticeCard('服务器配置同步成功');
                     break;
+                }
                 case 'scan_progress':
                     if (isStoppingTask) break;
                     updateProgress(msg.data.current || 0, msg.data.total || 0, '扫描中');
